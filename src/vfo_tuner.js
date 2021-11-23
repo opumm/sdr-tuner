@@ -7,27 +7,22 @@ document.getElementById('connectTuner').addEventListener('click', () => {
 });
 
 function tuner_freq(value) {
-  // var step=les_modes[SDR_RX.mode][5];
-  // SDR_RX.fine = SDR_RX.fine+step*value;
-  // choix_freq_fine();
-  // Affiche_Curseur();
-
-  console.log('tune change: ' + value + '\n');
-
+  var step=les_modes[SDR_RX.mode][5];
+  SDR_RX.fine = SDR_RX.fine+step*value;
+  choix_freq_fine();
+  Affiche_Curseur();
 }
 
 function ptt_on() {
-  // if(!audioTX.Transmit){
-  //   Transmit_Flip_On_Off();
-  // }
-  console.log('TX started \n');
+  if(!audioTX.Transmit){
+    Transmit_Flip_On_Off();
+  }
 }
 
 function ptt_off() {
-  // if(audioTX.Transmit){
-  //   Transmit_Flip_On_Off();
-  // }
-  console.log('TX ended \n');
+  if(audioTX.Transmit){
+    Transmit_Flip_On_Off();
+  }
 }
 
 async function changeState(value){
