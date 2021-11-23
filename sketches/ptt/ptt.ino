@@ -74,7 +74,7 @@ void PinA(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
   if(reading == B00001100 && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos = 3; //decrement the encoder's position count
+    encoderPos = 4; //decrement the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }
@@ -86,7 +86,7 @@ void PinB(){
   cli(); //stop interrupts happening before we read pin values
   reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
   if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos = 4; //increment the encoder's position count
+    encoderPos = 3; //increment the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
   }

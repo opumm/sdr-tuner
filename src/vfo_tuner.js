@@ -7,7 +7,7 @@ document.getElementById('connectTuner').addEventListener('click', () => {
 });
 
 function tuner_freq(value) {
-  var step=les_modes[SDR_RX.mode][5];
+  var step=RX_modes[SDR_RX.mode][2];
   SDR_RX.fine = SDR_RX.fine+step*value;
   choix_freq_fine();
   Affiche_Curseur();

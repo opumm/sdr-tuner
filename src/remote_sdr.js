@@ -1,57 +1,10 @@
 // ***********************************
-// *           REMOTE SDR v2         *
+// *           REMOTE SDR v3         *
 // *              F1ATB              *
 // * GNU General Public Licence v3.0 *
 // ***********************************
-const Version="Remote SDR V2.4<br><a href='http://f1atb.fr' target='_blank'>F1ATB</a> September 2021";				
-
-// Variables Audio
-//****************
-var audioRX={Ctx:null, //Contexte
-	nbCanaux:1, //Mono
-	nbFrames:null,
-	Tampon:null, //Zone mémoire
-	Duree:2500, // Duree Tampon en ms
-	Source:null,
-	Started:false,
-	deltaIdx:1,  //Rapport sortie audio/entree audio
-    tablDonnees:null,
-    idxRempli:0,idx_sortie:0,idx_charge:0,entreeFreq:10000,sortieFreq:0,on:false};
-const Delta_t_InOut=0.2; // Typical delay in Buffer Audio IN, Audio out: 200ms 
-const audioFFT=2048;
-const Port_socket=8001;
-var S_metre={level:0,RC_level:0,large:false,bruit:0,teta:0}
-// Variables websockets
-var websocket_audio;
-var websocket_spectre;
-var websocket_para;
-var web_socket={audio_on:false,spectre_on:false,para_on:false,spectre_in:false};
-var Watch_dog={RXpara:-2,RXspectre:-2,RXaudio:-2,TXpara:-2,Last_Refresh:0};
-//Parametres GNU Radio
-var rx_python_gnuradio_script="";
-var SDR_RX={Audio_RX:145100000,fine:0,centrale_RX:145000000,FrRX:0,offset:0,Ecart_LNB:0,idx_offset:0,
-            echant:2400000,min:0,max:0,bande:1,idx_bande:2,mode:1,auto_offset:true,bandeRX:0,BandeRXmin:0,
-			BandeRXmax:0,Larg_Fil:2400,VolAudio:1,VolAudinTX:0.2,IP:"",squelch:-80,sdr:""};
-var Gain_RX={RF:0,IF:20,BB:20};
-var audioRX_PB={F1:200,F2:2600}; // Passe bande Audio
-var Ecart_LNBs=new Array();  //Correction des offset theoriques du fichier de configuration, sauvegardé en local
-var bandes=new Array();
-//bande affichée,LP_bande reelle/2,decimLP
-bandes.push(["125 kHz",65000,16]);
-bandes.push(["250 kHz",130000,8]);
-bandes.push(["500 kHz",260000,4]);
-bandes.push(["1 MHz",520000,2]);
-bandes.push(["2 MHz",1040000,1]);
-//Reception/Transmission modes
-var les_modes=new Array();
-les_modes.push([0,"LSB","hack_ssb","pluto_ssb",3800,10]);
-les_modes.push([1,"USB","hack_ssb","pluto_ssb",3800,10]);
-les_modes.push([2,"AM","hack_am","pluto_am",7500,10]);
-les_modes.push([3,"NBFM","hack_nbfm","pluto_nbfm",10000,100]);
-les_modes.push([4,"WBFM","hack_wbfm","pluto_wbfm",150000,1000]);
-var timer_info=0;
-//Filtres Audio
-var biquadFilterHP_RX, biquadFilterLP_RX;;
+const Version = "Remote SDR V4.0<br><a href='http://f1atb.fr' target='_blank'>F1ATB</a> November 2021";				
+const Version_Local_Storage = "4.0";
 //Visus
 const FFT = 2048; //Taille FFT
 var visus={spectre_haut:0.0002,spectre_bas:0,spectre_lisse:true,water_haut:0.0004,water_bas:0};
@@ -70,235 +23,16 @@ var Liste_F_Perso=new Array();
 var ZoomFreq={id:"",pos:0};
 //GPIOstate
 var RX_GPIO_state="";
+//CPUs
+var CPU_Model ="";
+var CPU_Models =[];
+//Scan
+var RX_Scan={on:false,areas:new Array(),idx:-1,level:50,count:0,idx_max:0};
+var BeamsToScan=new Array();
+//Storage
+var Local_Storage = false;
+var RX_Xtal_Errors=new Array();  //Errors Xtal frequency
 
-$("#start-audio").click ( function() {
-	audioRX.on=!audioRX.on;
-	if (audioRX.Ctx==null && SDR_RX.IP.length>3){
-		audioRX.Ctx = new AudioContext(); 
-		audioRX.nbFrames = audioRX.Ctx.sampleRate * audioRX.Duree/1000;
-		audioRX.sortieFreq=audioRX.Ctx.sampleRate;
-		audioRX.deltaIdx=audioRX.sortieFreq/audioRX.entreeFreq; //Rapport sortie audio/entree audio
-		audioRX.tablDonnees = audioRX.Ctx.createBuffer(audioRX.nbCanaux, audioRX.nbFrames, audioRX.Ctx.sampleRate);
-		audioRX.Started=false;
-		audioRX.idxRempli=0;
-		// valeurs aléatoires entre -1.0 et 1.0
-		// Récupère un AudioBufferaudioRX.SourceNode.
-		// C'est un AudioNode à utiliser quand on veut jouer AudioBuffer
-		audioRX.Source = audioRX.Ctx.createBufferSource();
-		// assigne le buffer au AudioBufferaudioRX.SourceNode
-		audioRX.Source.buffer = audioRX.tablDonnees;
-		audioRX.Source.loop=true;
-		//Filtre audio passehaut
-		biquadFilterHP_RX = audioRX.Ctx.createBiquadFilter();
-		biquadFilterHP_RX.type = "highpass";
-		biquadFilterHP_RX.frequency.value=audioRX_PB.F1; //Fc:basse
-		//Filtre audio passebas
-		biquadFilterLP_RX = audioRX.Ctx.createBiquadFilter();
-		biquadFilterLP_RX.type = "lowpass";
-		biquadFilterLP_RX.frequency.value=audioRX_PB.F2; //Fc:haute
-		// connecte le AudioBufferaudioRX.SourceNode avec le filtre
-		audioRX.Source.connect(biquadFilterHP_RX);
-		biquadFilterHP_RX.connect(biquadFilterLP_RX);
-		// Connecte le filtre à la destination pour qu'on puisse entendre le son
-		biquadFilterLP_RX.connect(audioRX.Ctx.destination);
-		Choix_PB_RX();
-			 
-		//Analyseur temporel et spectral
-		analyser_node_RX = audioRX.Ctx.createAnalyser();
-		analyser_node_RX.smoothingTimeConstant = 0.9;
-		analyser_node_RX.fftSize = audioFFT;
-		  // audioRX.Source connecté à l'analyseur;
-		biquadFilterLP_RX.connect( analyser_node_RX );
-		var buffer_length = analyser_node_RX.frequencyBinCount;
-		var array_freq_domain = new Uint8Array(buffer_length);
-		var script_processor_analysis_node = audioRX.Ctx.createScriptProcessor(audioFFT, 1, 1);
-		script_processor_analysis_node.connect(audioRX.Ctx.destination); //Buffer sortie ne sera pas utilisé. Mais connection bidon necessaire
-		script_processor_analysis_node.onaudioprocess = function(data) { //Quand le buffer est plein
-								var inputBuffer = data.inputBuffer;
-								analyser_node_RX.getByteFrequencyData(array_freq_domain);
-								
-								var array_time_domain = new Uint8Array(buffer_length);
-								analyser_node_RX.getByteTimeDomainData(array_time_domain);
-								Dessine_Tableau("myAudio_RX_T",array_time_domain,0,0);									
-								
-								Dessine_Tableau("myAudio_RX_FFT",array_freq_domain,inputBuffer.sampleRate,4000);
-					   };
-		
-		audioRX.on=true;
-	} 
-	if (audioRX.on) {
-		if (!web_socket.audio_on) Lance_Websocket_audio();
-		var v="RX Audio On";
-		$("#start-audio").removeClass('bt_off').addClass('bt_on');
-	}else{
-		var v="RX Audio Off";
-		$("#start-audio").removeClass('bt_on').addClass('bt_off');
-		for (var i=0;i<audioRX.nbFrames;i++) {
-						audioRX.Tampon[i]=0; //Reset audio Buffer when off
-		}
-	}
-	$("#start-audio").html(v);
-	
-})
-// The Websockets
-//***************
-function Lance_Websocket_audio(){
-	//Initialisation du websocket_audio
-	// serveur de test public
-	var adresse="ws://"+SDR_RX.IP+":"+parseInt(Port_socket).toString()+"/"; //Port serveur web de base  pour l'audio
-	websocket_audio = new WebSocket(adresse);
-	$("#RX_audi_set").css("background-color","LightGreen");
-	// code à déclencher quand le connexion est ouverte
-	websocket_audio.onopen = function(evt) {
-	  $("#RX_audi_con").css("background-color","LightGreen"); //Audio connected
-	  web_socket.audio_on=true;
-	  console.log("RX audio socket open");
-	};
-	// code à déclencher si le serveur nous envoie un message
-	websocket_audio.onmessage = function(evt) {
-		var canal=0; //Mono
-		audioRX.Tampon = audioRX.tablDonnees.getChannelData(canal);
-		var SR=audioRX.Ctx.sampleRate;
-		var s="";
-		var DataAudio_blob = evt.data; //Data Audio reçues en Blob 
-		var reader = new FileReader();  // A lire comme un fichier
-			reader.addEventListener("loadend", function() {
-			   // reader.result contient le contenu du
-			   // blob sous la forme d'un tableau typé
-			   if(!audioRX.Started){
-					audioRX.Started=true;
-					// lance la lecture du so
-					audioRX.Source.start();
-					audioRX.idx_charge=0;
-					audioRX.idx_sortie=0;
-					for (var i=0;i<audioRX.nbFrames;i++) {
-						audioRX.Tampon[i]=0; //Reset Buffer at start
-					}
-				}
-			   var audio=new Int16Array(reader.result);
-			  //Audio Index load and read managemenr
-			   audioRX.idx_sortie=Math.floor(audioRX.Ctx.currentTime*audioRX.Ctx.sampleRate);
-			   var deltaIndex=audioRX.idx_charge-audioRX.idx_sortie-audioRX.Ctx.sampleRate*Delta_t_InOut; //Point equilibre 
-			   if(deltaIndex>audioRX.Ctx.sampleRate*0.4) audioRX.idx_charge=audioRX.idx_sortie+audioRX.Ctx.sampleRate*0.19
-			   audioRX.deltaIdx=audioRX.deltaIdx-deltaIndex/100000000; //Coef correction
-			   if(deltaIndex<-audioRX.Ctx.sampleRate*0.15) audioRX.idx_charge=audioRX.idx_sortie+audioRX.Ctx.sampleRate*0.11;
-			   audioRX.entreeFreq=audioRX.Ctx.sampleRate/audioRX.deltaIdx;
-			   audioRX.idxRempli=audioRX.idxRempli%audioRX.nbFrames;
-			  // Volume RX Audio
-    		   var Maxi=0;
-			   var Vol=SDR_RX.VolAudio;
-			   if(audioTX.Transmit) Vol=SDR_RX.VolAudinTX; //Volume audio quand on transmet
-			   if (!audioRX.on) Vol=0; //Audio Off
-			   for (var i=0;i<audio.length;i++) {
-					var v=audio[i]; //Echantillon 16 bits signés
-					Maxi=Math.max(Maxi,v);
-					
-					v=Vol*v/32768; // l'audio doit être compris entre [-1.0; 1.0]
-					v=Math.min(1,Math.max(-1,v));
-					var idx_debut_rempli=audioRX.idx_charge;
-					var idx_fin_rempli=audioRX.idx_charge+audioRX.deltaIdx;
-					for (j=idx_debut_rempli;j<idx_fin_rempli;j++){
-					    audioRX.idxRempli=Math.floor(j)%audioRX.nbFrames;
-						audioRX.Tampon[audioRX.idxRempli] =v; // On rempli le buffer des sons
-					}
-					audioRX.idx_charge=idx_fin_rempli;
-				}
-				
-			});
-			reader.readAsArrayBuffer(DataAudio_blob);
-			Watch_dog.RXaudio=0;
-	};
-	// en cas d'erreur
-	websocket_audio.onerror = function(evt){
-	  console.log(evt);
-	};
-}
-function Lance_Websocket_spectre(){
-	//Initialisation du websocket_spectre
-	// serveur 
-	var adresse="ws://"+SDR_RX.IP+":"+(parseInt(Port_socket)+1).toString()+"/"; //Port serveur web de base +1 pour le spectre
-	websocket_spectre = new WebSocket(adresse);
-	$("#RX_spec_set").css("background-color","LightGreen");
-	// code à déclencher quand le connexion est ouverte
-	websocket_spectre.onopen = function(evt) {
-	  $("#RX_spec_con").css("background-color","LightGreen"); //Connected
-	  web_socket.spectre_on=true;
-	  first_spectre=true
-	  console.log("RX spectra socket open");
-	};
-	// code à déclencher si le serveur nous envoie spontanément
-	// un message
-	websocket_spectre.onmessage = function(evt) {
-		if(!web_socket.spectre_in) { //First messages arrive. GNU RADIO launched
-			$("#RXonLed").css("background-color","Pink");
-			Lance_Websocket_para();
-			setTimeout("init_para_sdrRX();", 300);
-		}
-		
-		var canvasOscillo = document.getElementById("myOscillo");
-		var ctx = canvasOscillo.getContext("2d");
-		ctx.beginPath();
-		ctx.strokeStyle = "green";
-		ctx.moveTo(TraceAudio.X, TraceAudio.H+2);
-		ctx.lineTo(TraceAudio.X, TraceAudio.H+7);
-		ctx.stroke();
-		
-		
-		web_socket.spectre_in=true;
-		var DataSpectre_blob = evt.data; //Data Spectre recues en Blob 
-		var reader = new FileReader();  // A lire comme un fichier
-			reader.addEventListener("loadend", function() {
-			   // reader.result contient le contenu du
-			   // blob sous la forme d'un tableau typé
-			   var spectre=new Int16Array(reader.result);
-			  Trace_Spectre(spectre);
-			  Trace_Waterfall(spectre);
-			  balise.nb_voies=spectre.length;
-			  balise.voie_recu=true;
-			});
-			reader.readAsArrayBuffer(DataSpectre_blob);
-			Watch_dog.RXspectre=0;
-	};
-	// in case of errors
-	websocket_spectre.onerror = function(evt){
-	  console.log(evt);
-	};
-}
-function Lance_Websocket_para(){
-	//Initialisation du websocket_spectre
-	// serveur 
-	var adresse="ws://"+SDR_RX.IP+":"+(parseInt(Port_socket)+2).toString()+"/"; //Port serveur web de base +2 pour les parametres
-	websocket_para = new WebSocket(adresse);
-	$("#RX_para_set").css("background-color","LightGreen");
-	
-	// code à déclencher quand le connexion est ouverte
-	websocket_para.onopen = function(evt) {
-	 $("#RX_para_con").css("background-color","LightGreen");
-	  web_socket.para_on=true;
-	  console.log("RX parameters socket open");
-	  $("#RXonLed").css("background-color","Orange");
-	};
-	// code à déclencher si le serveur nous envoie spontanément
-	// un message
-	websocket_para.onmessage = function(evt) {
-		// le serveur envoi des messages
-		web_socket.para_on=true;
-		$("#RXonLed").css("background-color","LightGreen");
-	    Watch_dog.RXpara=0;
-	};
-	// en cas d'erreur
-	websocket_para.onerror = function(evt){
-	  console.log(evt);
-	};
-}
-function init_para_sdrRX(){
-	 //On initialise les parametres du  traitement SDR
-	  choix_freq_fine();
-	  choix_freq_central();
-	  choix_bande();
-	  choix_mode();
-	  choix_GainRX();
-}
 
 // CANVAS
 //********
@@ -401,15 +135,50 @@ function 	Trace_Spectre(spectre){
 	
 	S+=X+',256 0,256" fill="url(#grad1)"  /></svg>';
 	$("#mySpectre").html(S);
+	//Band Scan
+	RX_Scan.count++; //+ per second
+	if (RX_Scan.on && RX_Scan.count>0) {
+		RX_Scan.count=-1;
+		var seuil_=H*RX_Scan.level/100;
+		var seuil=((1-seuil_/H)/visus.spectre_haut) - visus.spectre_bas;
+		for (var i=0;i<Sl;i++){
+			var j=(i+RX_Scan.idx_max)%Sl;
+			
+			if(BeamsToScan[j]){
+				if (voies_moy[j]>seuil){
+					
+					RX_Scan.count=-50;
+					var Ffine = Estimate_Max_Freq(j); // j=Index voie qui a franchi le seuil
+					if (SDR_RX.mode==0 )  Ffine += 700;//  LSB  shift estimate
+					if (SDR_RX.mode==1 )  Ffine += -700;//  USB 
+					SDR_RX.fine =Ffine;
+					choix_freq_fine()
+					RX_Scan.idx_max=Math.floor(FFT*((SDR_RX.fine+10000)/SDR_RX.bande+0.5)); // Next channel to scan 10 kHz at the right 
+					
+					Affiche_Curseur();
+					
+					i=Sl;
+					
+				}
+				
+			}
+		}
+	}
 	
 	//Niveau S_metre
-	var idx_audio=Math.floor(Sl*(0.5+SDR_RX.fine/(SDR_RX.bande)));
-	if (SDR_RX.mode==0 )  idx_audio--;//  LSB
-	if (SDR_RX.mode==1 )  idx_audio++;//  USB 
-	idx_audio=Math.max(1,idx_audio);
-	idx_audio=Math.min(Sl-2,idx_audio);
-	S_metre.level=Math.max(voies_moy[idx_audio-1],voies_moy[idx_audio],voies_moy[idx_audio+1]);
-	S_metre.bruit=0.9999*Amp_min+0.0001*S_metre.bruit; //Niveau bruit sur l'horizon	
+	var deltaF1=RX_modes[SDR_RX.mode][1]/2;
+	var deltaF0=-deltaF1;
+	if (SDR_RX.mode==0 )  {deltaF0=2*deltaF0;deltaF1=0;}//  LSB
+	if (SDR_RX.mode==1 )  {deltaF1=2*deltaF1;deltaF0=0;}//  USB 
+	var idx_audio0=Math.floor(Sl*(0.5+(SDR_RX.fine +deltaF0)/(SDR_RX.bande)));
+	var idx_audio1=Math.floor(Sl*(0.5+(SDR_RX.fine +deltaF1)/(SDR_RX.bande)));
+	S_metre.level=-100000;
+	for (var i=idx_audio0;i<=idx_audio1;i++){
+		var j=Math.max(0,i);
+		j=Math.min(Sl-1,j);
+		S_metre.level=Math.max(S_metre.level,voies_moy[j]);
+	}
+	S_metre.bruit=0.9999*Amp_min+0.0001*S_metre.bruit; //Noise level on horizon	
 	
 	S_metre.RC_level=Math.max(S_metre.level,0.05*S_metre.level+0.95*S_metre.RC_level); //Montée rapide
 	var Sdb=(S_metre.RC_level-S_metre.bruit)/100;
@@ -471,6 +240,28 @@ function 	Trace_Spectre(spectre){
 	ctx.fillText("kHz", W*0.93, 0.9*H);	
 	ctx.stroke();
 	
+}
+
+function Estimate_Max_Freq(Idx0){
+	var dIdx=Math.floor(5+FFT*RX_modes[SDR_RX.mode][1]/SDR_RX.bande); //Define search area according to bandwidth
+	var idx_start=Math.max(0,Idx0-dIdx);
+	var idx_end=Math.min(FFT-1,Idx0+dIdx);
+	var Vmax=-100000;
+	for (var i=idx_start;i<=idx_end;i++){
+		if ( voies_moy[i]> Vmax) {
+			Idx0=i; //Search maximum beam
+			Vmax=voies_moy[i];
+		}
+	}
+	Idx0=Math.max(5,Math.min(FFT-5,Idx0))
+	var Vg=Math.pow(10,voies_moy[Idx0-1]/10000); //Linear and not dB
+	var Vc=Math.pow(10,voies_moy[Idx0]/10000);
+	var Vd=Math.pow(10,voies_moy[Idx0+1]/10000);
+	
+	var dIdx=5*(Vd - Vg)/Vc;
+	dIdx=Math.max(-0.5,Math.min(0.5,dIdx))
+	var Freq_of_Max=((Idx0+dIdx+0.5)/FFT-0.5)*SDR_RX.bande; //Freq fine of the maximum
+	return Freq_of_Max;
 }
 function Trace_Waterfall(spectre){
 	if (waterfall.ligne==0) waterfall.bloc=!waterfall.bloc;	
@@ -588,8 +379,8 @@ function Trace_Echelle(){ // Scale drawing
 			S+='<div id="beacon'+i+'" style="left:'+X+'px">^</div>';
 			balise.Freq[balise.nb]=BeaconSync[i][0];
 			balise.Idx[balise.nb]=Math.floor(balise.nb_voies*(0.5+(balise.Freq[balise.nb]-SDR_RX.centrale_RX)/(SDR_RX.bande))); //Voie centrale
-			balise.Idx_zone[balise.nb][0]=Math.floor(balise.nb_voies*(0.5+(balise.Freq[balise.nb]-SDR_RX.centrale_RX-4000)/(SDR_RX.bande))); //Voie bas zone recherche grossière
-			balise.Idx_zone[balise.nb][1]=Math.floor(balise.nb_voies*(0.5+(balise.Freq[balise.nb]-SDR_RX.centrale_RX+4000)/(SDR_RX.bande))); //Voie haute zone recherche grossière
+			balise.Idx_zone[balise.nb][0]=Math.floor(balise.nb_voies*(0.5+(balise.Freq[balise.nb]-SDR_RX.centrale_RX-10000)/(SDR_RX.bande))); //Voie bas zone recherche grossière
+			balise.Idx_zone[balise.nb][1]=Math.floor(balise.nb_voies*(0.5+(balise.Freq[balise.nb]-SDR_RX.centrale_RX+10000)/(SDR_RX.bande))); //Voie haute zone recherche grossière
 			balise.F_Voies[balise.nb]=SDR_RX.centrale_RX+(balise.Idx[balise.nb]+0.5-balise.nb_voies/2)*SDR_RX.bande/balise.nb_voies; //Freq centre voie
 			balise.Voies[balise.nb]=[0,0,0]; //Amplitude gauche,centre droite
 			var Kc=2*balise.nb_voies*(BeaconSync[i][0]-balise.F_Voies[balise.nb])/(SDR_RX.bande); // Coef ponderation voie centrale
@@ -603,158 +394,128 @@ function Trace_Echelle(){ // Scale drawing
 	}
 	$("#echelle_track").html(S); //Marqueurs des beacons
 	Audio_Bandwidth();
-}
-
-// PARAMETERS TO PASS TO THE RX SDR
-//*********************************
-function choix_freq_central() {
-	SDR_RX.centrale_RX=Math.floor(SDR_RX.centrale_RX);
-	SDR_RX.offset=0;
-	for (var i=0;i<Offset.length;i++){
-			if(SDR_RX.centrale_RX>Offset[i][0] && SDR_RX.centrale_RX<Offset[i][1]) {
-				SDR_RX.offset=Offset[i][2];
-				SDR_RX.Ecart_LNB=Ecart_LNBs[i];
-				SDR_RX.idx_offset=i;
-			}
-	}
-	SDR_RX.FrRX=SDR_RX.centrale_RX+SDR_RX.offset+SDR_RX.Ecart_LNB;
-	SDR_RX.FrRX=Math.floor(SDR_RX.FrRX);
-	if (SDR_RX.FrRX>SDR_para.Fmin && SDR_RX.FrRX<SDR_para.Fmax){ //Frequence autorisée
-		if (web_socket.para_on && web_socket.spectre_in) {
-			websocket_para.send( '{"FrRX":"' + SDR_RX.FrRX+'"}'); //Frequence du SDR
-			$("#RXonLed").css("background-color","blue");
-			Affich_freq_champs(SDR_RX.FrRX,"#SFr")
-			Watch_dog.Last_Refresh=0;
-			Set_RX_GPIO();
-		}
-		$("#Frequence_AudioRX").css("background-color","#555");
-	} else {
-		$("#Frequence_AudioRX").css("background-color","#F00");
-	}
-	Trace_Echelle();
-	Affich_freq_Audio_RX();
-	Affich_freq_champs(SDR_RX.offset,"#OFS");
-	Affich_freq_champs(SDR_RX.Ecart_LNB,"#DOF");
-	if (ZoomFreq.id=="DOF") Affich_freq_champs(SDR_RX.Ecart_LNB,"#ZFr"); //Zoom display	
-}
-function Audio_Bandwidth(){ // Green Cursor width
-	var bw=les_modes[SDR_RX.mode][4];
 	
-	var Hz_by_pix=SDR_RX.bande/fenetres.spectreW;
-	var wp=bw/Hz_by_pix;
-	$("#curseur_w").css("width",wp+"px");
-	var left=10-wp/2;
-	if (les_modes[SDR_RX.mode][1]=="LSB") left=10-wp;
-	if (les_modes[SDR_RX.mode][1]=="USB") left=10;
-	$("#curseur_w").css("left",left+"px");
-}
-function choix_modulation(){ //MODULATION
+	//Scan Areas
+	//**********
 	
-
-	SDR_RX.mode = $("input[name='mode']:checked").val();
-		for (var i=0;i<les_modes.length;i++){
-			if (les_modes[i][0]==SDR_RX.mode){
-				var choix_python_script=les_modes[i][2]; //HackRF or RTL-SDR
-				if (SDR_RX.sdr=="pluto") choix_python_script=les_modes[i][3]; //Pluto SDR
-				if (choix_python_script!=rx_python_gnuradio_script && SDR_RX.IP.length>3) {
-					rx_python_gnuradio_script=choix_python_script;	
-					// Stop sending parameters
-					if (web_socket.para_on) {websocket_para.close();web_socket.para_on=false;}
-					if (web_socket.spectre_on) {websocket_spectre.close();web_socket.spectre_on=false;web_socket.spectre_in=false;}
-					if (web_socket.audio_on) {
-						websocket_audio.close();web_socket.audio_on=false;
-						for (var j=0;j<audioRX.nbFrames;j++) {
-										audioRX.Tampon[j]=0; //Reset audio Buffer when off
-						}
-					}
-					
-					var adresse="http://"+SDR_RX.IP+"/cgi-bin/SelectRxRadio.py"
-					var loader='<iframe src="' + adresse + '?' + rx_python_gnuradio_script + '" onload="Sockets_launcher();"></iframe>'
-					$("#RX_loader").html(loader);
-				
+	//Remove scan zone overlapoverlap
+	if (RX_Scan.areas.length>1) {
+		for (var i=0;i<RX_Scan.areas.length-1;i++){
+			var Area=RX_Scan.areas[i];
+			for (var j=i+1;j<RX_Scan.areas.length;j++){
+				var fmin=RX_Scan.areas[j].Fmin;
+				var fmax=RX_Scan.areas[j].Fmax;
+				if ((fmin >=  Area.Fmin && fmin <=  Area.Fmax) || (fmax>=  Area.Fmin && fmax <=  Area.Fmax)) {  //Overlap
+					RX_Scan.areas[i].Fmin=Math.min(Area.Fmin,fmin); // fuse
+					RX_Scan.areas[i].Fmax=Math.max(Area.Fmax,fmax);
+					RX_Scan.areas[j].Fmin=0;RX_Scan.areas[j].Fmax=0;
 				}
 			}
 		}
-	Audio_Bandwidth();
-}
-
-function Sockets_launcher(){
-	console.log("RX launched gnuradio script : " + rx_python_gnuradio_script)
-	$("#RXonLed").css("background-color","Red");
-	setTimeout("Lance_Websocket_spectre();", 1020);	
-	if (!web_socket.audio_on && audioRX.on) setTimeout("Lance_Websocket_audio();", 1200);
-	setTimeout("init_para_sdrRX();", 5000);
-}
-function choix_mode(){ //MODE 
-	SDR_RX.mode = $("input[name='mode']:checked").val();
-	choix_modulation();
-	if (web_socket.para_on && web_socket.spectre_in  ) {
-		for (var i=0;i<les_modes.length;i++){
-			if (les_modes[i][0]==SDR_RX.mode){
-				if( les_modes[i][1]=="LSB" || les_modes[i][1]=="USB") websocket_para.send( '{"LSB_USB":"' + SDR_RX.mode+'"}') ;
-				if( les_modes[i][1]=="NBFM" || les_modes[i][1]=="WBFM" || les_modes[i][1]=="AM") websocket_para.send( '{"Squelch":"' + SDR_RX.squelch+'"}') ;
+		for (var i=RX_Scan.areas.length-1;i>=0;i--){
+			if (RX_Scan.areas[i].Fmin == 0) {
+				RX_Scan.areas.splice(i,1); //Remove overlap
 			}
 		}
 	}
-	sauvegarde_parametres();
-	
-	
-	setTimeout("console.log('RX initiate TX');Mode_TX();", 800); //Required for Pluto to delay the TX launching
-	
-}
-function click_squelch(){
-	    $("#val_squelch" ).html(SDR_RX.squelch);
-		$("#fen_squelch" ).css("display","block");
-		timer_info=2;
-}
-function choix_bande(){ //Decimation done in GNU Radio
-    if(SDR_RX.sdr=="pluto") SDR_RX.idx_bande=Math.min(SDR_RX.idx_bande,bandes.length-2);//Pluto Max bandwidth 1MHz
-	if (web_socket.para_on  && web_socket.spectre_in) websocket_para.send( '{"decim_LP":"' + bandes[SDR_RX.idx_bande][2]+'"}');
-	$("#Bande_RX").html( bandes[SDR_RX.idx_bande][0] );
-}
-function choix_freq_fine(){  //Frequency for audio channel
-	var deltaF=(SDR_RX.bande)/2;
-	SDR_RX.fine=Math.max(SDR_RX.fine,-deltaF);
-	SDR_RX.fine=Math.min(SDR_RX.fine,deltaF);
-	SDR_RX.fine=Math.floor(SDR_RX.fine);
-	if (web_socket.para_on  && web_socket.spectre_in) websocket_para.send( '{"F_Fine":"' + SDR_RX.fine+'"}');
-	Affich_freq_Audio_RX();
-	timer_auto_relay=2;
-}	
-function choix_GainRX(){ //Gains for RX SDR
-	if (web_socket.para_on  && web_socket.spectre_in){
-		websocket_para.send( '{"Gain_RF":"' + Gain_RX.RF+'"}');
-		websocket_para.send( '{"Gain_IF":"' + Gain_RX.IF+'"}');
-		websocket_para.send( '{"Gain_BB":"' + Gain_RX.BB+'"}');
+	for (var i=0;i<FFT;i++) { BeamsToScan[i]=false;}
+	S="";
+	var one_valid=false;
+	for (var i=0;i<RX_Scan.areas.length;i++){
+		var Area=RX_Scan.areas[i];
+		if ((Area.Fmin>=SDR_RX.min && Area.Fmin<=SDR_RX.max)  || (Area.Fmax>=SDR_RX.min && Area.Fmax<=SDR_RX.max)) { //Freq min et max de la zone
+			var left=Math.floor((Area.Fmin-SDR_RX.min)*ecran.innerW/(SDR_RX.bande));
+			var right=Math.floor((Area.Fmax-SDR_RX.min)*ecran.innerW/(SDR_RX.bande));
+			var width=right-left;
+			S+='<div class="Scan_area" onmousedown="RX_Scan.idx='+i+';" style="left:'+left+'px;width:'+width+'px;"></div>';
+			RX_Scan.areas[i].left=left;
+			RX_Scan.areas[i].right=right;
+			RX_Scan.areas[i].width=width;
+			var idx_left=Math.floor((Area.Fmin-SDR_RX.min)*FFT/(SDR_RX.bande));idx_left=Math.max(0,idx_left);idx_left=Math.min(FFT -1,idx_left);
+			var idx_right=Math.floor((Area.Fmax-SDR_RX.min)*FFT/(SDR_RX.bande));idx_right=Math.max(0,idx_right);idx_right=Math.min(FFT -1,idx_right);
+			idx_right=Math.max(idx_left,idx_right);
+			for (var j=idx_left;j<=idx_right;j++){
+				BeamsToScan[j]=true;
+			}
+			one_valid=true;
+		} 
 	}
-	$("#GRFRX").html(Gain_RX.RF);
-	$("#GIFRX").html(Gain_RX.IF);
-	$("#GBBRX").html(Gain_RX.BB);
-	sauvegarde_Gains();
-}
-function Choix_PB_RX(){ // Bandpass filter for the audio. Cannot be changed in GNU Radio to maintain 90° oscillator phases difference
-	if (biquadFilterHP_RX!=null) biquadFilterHP_RX.frequency.value=audioRX_PB.F1;
-	if (biquadFilterLP_RX!=null) biquadFilterLP_RX.frequency.value=audioRX_PB.F2;
-	$("#LFARX").html(audioRX_PB.F1+" - "+audioRX_PB.F2);
+	
+	if (!one_valid){
+		RX_Scan.on=false;
+		Scan_status();
+	}
+	$("#Scan_Zone").html(S);
+	$("#Scan_Zone").css("top",RX_Scan.level*fenetres.spectreH/100);
+	
 }
 
-// GPIO Set to switch any device On the Orange Pi/Raspberry Pi managing the receiver. Refer to configurationRX.js file
-function Set_RX_GPIO(){
-	var s="";
-	var v="";
-	for (var i=0;i<RX_GPIO.length;i++){
-		if (SDR_RX.FrRX >= RX_GPIO[i][0] && SDR_RX.FrRX <= RX_GPIO[i][1]  && (!audioTX.Transmit && RX_GPIO[i][4] || audioTX.Transmit && RX_GPIO[i][5]  )){
-			s+= v + RX_GPIO[i][2] + "," + RX_GPIO[i][3]	;
-			v = "*";
-		}
+//Scan
+$("#Scan").click ( function() {
+	//Scan button
+	RX_Scan.on = !RX_Scan.on;
+	if (RX_Scan.on) Scan_create_area();
+	Scan_status();
+	Save_SDR_Para();	
+})
+function Scan_status() {
+	//Scan button
+	if(RX_Scan.on) {
+		$("#Scan").removeClass('bt_off').addClass('bt_on');
+		$("#Scan_Zone").css("display","block");
+	} else {
+		$("#Scan").removeClass('bt_on').addClass('bt_off');
+		$("#Scan_Zone").css("display","none");
 	}
-	if (s != "" && RX_GPIO_state != s){
-		var adresse="http://"+SDR_RX.IP+"/cgi-bin/SetGPIO.sh?"+s;
-		var setgpio='<iframe src="' + adresse + '" ></iframe>'
-		$("#RX_GPIO").html(setgpio);	
-		RX_GPIO_state = s;
+		
+}
+function Add_Scan(ev){
+	ev.stopPropagation()
+	Scan_create_area()
+}
+function Scan_create_area(){	
+	var Area={Fmin:SDR_RX.Audio_RX-50000,Fmax:SDR_RX.Audio_RX+50000,left:0,right:0,width:0,in_band:false}
+	RX_Scan.areas.push(Area);
+	Trace_Echelle();
+	
+}
+
+
+function Scan_move(ev){	
+	if(RX_Scan.idx>=0) {
+		 ev = ev || window.event;
+		 ev.preventDefault();
+		 ev.stopPropagation();
+		 var pos_mouse =  ev.clientX-ecran.border;
+		 var freq=Math.floor(SDR_RX.min+pos_mouse*SDR_RX.bande/ecran.innerW);
+		 freq=Math.max(SDR_RX.BandeRXmin,freq);freq=Math.min(SDR_RX.BandeRXmax,freq);
+		 if (RX_Scan.idx< RX_Scan.areas.length ){
+			 if(Math.abs(pos_mouse-RX_Scan.areas[RX_Scan.idx].left)<2+RX_Scan.areas[RX_Scan.idx].width/2.5){
+				 RX_Scan.areas[RX_Scan.idx].Fmin=freq;
+				 $("#Scan_Zone").css("pointer","e-resize");
+			 }
+			  if(Math.abs(pos_mouse-RX_Scan.areas[RX_Scan.idx].right)<2+RX_Scan.areas[RX_Scan.idx].width/2.5){
+				 RX_Scan.areas[RX_Scan.idx].Fmax=freq;
+				  $("#Scan_Zone").css("pointer","e-resize");
+			 }
+			 var pos_mouse = 100*( ev.clientY -ecran.border-$("#spectre").offset().top)/fenetres.spectreH;
+			 pos_mouse=Math.max(0,pos_mouse);
+			 RX_Scan.level=Math.floor(Math.min(90,pos_mouse));
+			 
+			 if((RX_Scan.areas[RX_Scan.idx].Fmax-RX_Scan.areas[RX_Scan.idx].Fmin)<10000) {
+				 RX_Scan.areas.splice(RX_Scan.idx,1); //Remove, too small
+				 RX_Scan.idx=-1;
+			 }
+		 }
+		
+		 Trace_Echelle();
+		 Save_SDR_Para();
 	}
-}	
+}
+
+function Stop_Move(){
+	RX_Scan.idx=-1;	
+}
 
 //Affichage - Display
 //**************
@@ -764,7 +525,7 @@ function Affich_freq_Audio_RX(){
 	Affich_freq_champs(SDR_RX.Audio_RX,"#FRX");
 	$("#CentFreq").html(FkHz(SDR_RX.centrale_RX)+" kHz");
 	if (ZoomFreq.id=="FRX") Affich_freq_champs(SDR_RX.Audio_RX,"#ZFr"); //Zoom display			
-	sauvegarde_parametres();
+	Save_RX_Para();
 	
 }
 function Affich_freq_champs(F,id){
@@ -773,11 +534,7 @@ function Affich_freq_champs(F,id){
 		$(id+i).html(Fr.substr(-i,1));
 	}
 }
-function Affiche_Mode(){
-	for (var i=0;i<les_modes.length;i++){
-		if (les_modes[i][0]==SDR_RX.mode) $("#"+les_modes[i][1]).prop("checked",true);					
-	}	
-}
+
 function Affiche_Curseur(){
 	var p=ecran.innerW*(0.5+SDR_RX.fine/(SDR_RX.bande))-10+ecran.border;
 	$("#curseur").css("left",p);
@@ -856,7 +613,7 @@ function Ssaisie(){
 	$("#Tsaisie").val("");
 	Liste_F.push([SDR_RX.Audio_RX,V,true]);
 	Liste_F_Perso.push([SDR_RX.Audio_RX,V]);
-	sauvegarde_parametres();
+	Save_SDR_Para();
 	Affiche_ListeF();
 }
 function Dsaisie(f,n){ //Delete one record
@@ -872,16 +629,16 @@ function Dsaisie(f,n){ //Delete one record
 				break;
 			}
 	}
-	sauvegarde_parametres();
+	Save_SDR_Para();
 	Affiche_ListeF();
 }
+
+
 //ANCIENS PARAMETRES - OLD parameters stored locally in browser
-function recupere_ancien_parametres(){
-	if (localStorage.getItem("SDR_RX")!=null){ // On a d'anciens parametres en local
-		SDR_RX = JSON.parse(localStorage.getItem("SDR_RX"));
-		$("#Auto_Offset_On").prop("checked",SDR_RX.auto_offset);
-		$("#"+SDR_RX.sdr).prop("checked",true);	
-		Ecart_LNBs = JSON.parse(localStorage.getItem("Ecart_LNBs"));
+
+function Recall_SDR_Para(){
+	if (Local_Storage){ // On a d'anciens parametres en local
+		console.log("Recall_SDR_Para(")
 		Liste_F_Perso = JSON.parse(localStorage.getItem("Liste_F_Perso"));
 		if (Liste_F_Perso.length>0){
 			for (var i=0;i<Liste_F_Perso.length;i++){
@@ -890,34 +647,30 @@ function recupere_ancien_parametres(){
 		}
 		Affich_freq_Audio_RX();
 		Affiche_Curseur();
-		Affiche_Mode(); 
+		RX_Scan = JSON.parse(localStorage.getItem("RX_Scan"));
+		RX_Scan.idx=-1;
+		Scan_status();
+		Trace_Echelle();
 	} 
 }
-function sauvegarde_parametres(){
-	SDR_RX.auto_offset=$("#Auto_Offset_On").prop("checked");
-	if (SDR_RX.IP.length<4) SDR_RX.IP="*"; //Case TX only, no RX
-	localStorage.setItem("SDR_RX", JSON.stringify(SDR_RX));	
-	localStorage.setItem("Ecart_LNBs", JSON.stringify(Ecart_LNBs));
+function Save_SDR_Para(){
 	localStorage.setItem("Liste_F_Perso", JSON.stringify(Liste_F_Perso));
+	localStorage.setItem("RX_Scan", JSON.stringify(RX_Scan));
+	localStorage.setItem("Local_Storage_", JSON.stringify(Version_Local_Storage));
 }
-function recupere_ancien_visus(){
-	if (localStorage.getItem("Visus")!=null){
+
+function Recall_visus(){
+	if (Local_Storage){
 		visus = JSON.parse(localStorage.getItem("Visus"));
-		$("#Spectre_average").prop("checked",visus.spectre_lisse);
+		$("#Spectre_average").prop("checked",visus.spectre_lisse);	
 	}
 }
-function sauvegarde_visus(){
+function Save_visus(){
 	visus.spectre_lisse=$("#Spectre_average").prop("checked");
 	localStorage.setItem("Visus", JSON.stringify(visus));
 }
-function recupere_ancien_Gains(){
-	if (localStorage.getItem("Gains_RX")!=null){
-		Gain_RX = JSON.parse(localStorage.getItem("Gains_RX"));		
-	}
-}
-function sauvegarde_Gains(){
-	localStorage.setItem("Gains_RX", JSON.stringify(Gain_RX));
-}
+
+
 
 //RESIZE
 //**********
@@ -1031,7 +784,7 @@ function Init_Sliders(){
 				 SDR_RX.idx_bande=ui.value;
 				choix_bande();
 				Recal_Freq_centrale();
-				sauvegarde_parametres();
+				Save_RX_Para();
 			  }
 			});
 		  } );
@@ -1048,10 +801,11 @@ function Init_Sliders(){
 			 var deltaF=(SDR_RX.bande)/2.1;
 			 SDR_RX.fine=Math.max(SDR_RX.fine,-deltaF);
 			 SDR_RX.fine=Math.min(SDR_RX.fine,deltaF);
+			 GPredictRXcount = -6;
 			 choix_freq_fine();
 			 choix_freq_central();
 			 Affiche_Curseur();
-			 sauvegarde_parametres();
+			 Save_RX_Para();
 		  }
 		});
 	  } );
@@ -1063,7 +817,7 @@ function Init_Sliders(){
 		  value:  visus.spectre_haut,
 		  slide: function( event, ui ) {
 			visus.spectre_haut = ui.value ;
-			sauvegarde_visus();
+			Save_visus();
 			Echelle_dB_Spectre();
 		  }
 		});
@@ -1076,7 +830,7 @@ function Init_Sliders(){
 		  value:  visus.spectre_bas,
 		  slide: function( event, ui ) {
 			visus.spectre_bas = ui.value ;
-			sauvegarde_visus();
+			Save_visus();
 			Echelle_dB_Spectre();
 		  }
 		});
@@ -1089,7 +843,7 @@ function Init_Sliders(){
 		  value:  visus.water_haut,
 		  slide: function( event, ui ) {
 			visus.water_haut = ui.value ;
-			sauvegarde_visus();
+			Save_visus();
 		  }
 		});
 	  } );
@@ -1101,7 +855,7 @@ function Init_Sliders(){
 		  value:  visus.water_bas,
 		  slide: function( event, ui ) {
 			visus.water_bas = ui.value ;
-			sauvegarde_visus();
+			Save_visus();
 		  }
 		});
 	  } );
@@ -1128,10 +882,17 @@ function Init_Sliders(){
 		});
 	  } );
 	  $( function() {
+		  var Vmax=50; //Gain Max RTL-SDR
+		  var Vstep=1;
+		  if (SDR_RX.sdr =="hackrf"){
+			  Vmax=10;Vstep=10; // 2 gains only
+		  }
+		  if (SDR_RX.sdr =="pluto") Vmax=72;
+		  Gain_RX.RF=Math.min(Gain_RX.RF,Vmax); 
 		$( "#slider_GRF_RX" ).slider({
 		  min:0 ,
-		  max: 40,
-		  step:0.5,
+		  max: Vmax,
+		  step:Vstep,
 		  value:  Gain_RX.RF,
 		  slide: function( event, ui ) {
 			Gain_RX.RF= ui.value ;
@@ -1143,7 +904,7 @@ function Init_Sliders(){
 		$( "#slider_GIF_RX" ).slider({
 		  min:0 ,
 		  max: 40,
-		  step:0.5,
+		  step:4,
 		  value:  Gain_RX.IF,
 		  slide: function( event, ui ) {
 			Gain_RX.IF= ui.value ;
@@ -1154,8 +915,8 @@ function Init_Sliders(){
 	  $( function() {
 		$( "#slider_GBB_RX" ).slider({
 		  min:0 ,
-		  max: 40,
-		  step:0.5,
+		  max: 60,
+		  step:2,
 		  value:  Gain_RX.BB,
 		  slide: function( event, ui ) {
 			Gain_RX.BB= ui.value ;
@@ -1168,11 +929,12 @@ function Init_Sliders(){
 		  range: true,
 		  min: 100,
 		  max: 4000,
-		  values: [ 200, 2600 ],
+		  values: [ audioRX_PB.F1, audioRX_PB.F2 ],
 		  slide: function( event, ui ) {
 			audioRX_PB.F1=ui.values[ 0 ];
 			audioRX_PB.F2=ui.values[ 1 ];
 			Choix_PB_RX();
+			Save_RX_Para();
 		  }
 		});		
 	  } );
@@ -1214,30 +976,39 @@ function visus_click_slider(t,anim){
 	}
 }
 
-// Initialisation RX
+// Initialisation SDR
 // *****************
 
-function Init_Page_RX(){
+function Init_Page_SDR(){
+	console.log("Init_Page_SDR()");
 	$("#f1atb").html(Version);
 	//RX Bandes
 	var S='<label for="bandSelectRX">HF band:</label>';
 	S+='<select name="bandSelectRX" id="bandSelectRX" onchange="newBandRX(this);">';
 	for (var i=0;i<BandesRX.length;i++){
 		S+='<option value='+i+'>'+BandesRX[i][2]+'</option>';
-		Ecart_LNBs[i]=0;
+		RX_Xtal_Errors[i]=0;
 	}
 	S+='</select>';
 	$("#BandeRX").html(S);
 	window_resize();
-	recupere_ancien_parametres();
-	recupere_ancien_visus();
-	recupere_ancien_Gains();
+	
+	//Local Storage
+	if (localStorage.getItem("Local_Storage_")!=null){ // We have an old storage
+		var VersionOldStorage =  JSON.parse(localStorage.getItem("Local_Storage_"));
+		if (Version_Local_Storage == VersionOldStorage) Local_Storage = true;
+	}
+	
+	Recall_RX_Para();
+	Recall_SDR_Para();
+	Recall_visus();
+	
 	choixBandeRX();
 	$("#BandeRX option[value='"+SDR_RX.bandeRX+"']").prop('selected', true);
 	Init_Sliders();
 	Init_champs_freq("FRX","#Frequence_AudioRX");
 	Init_champs_freq("OFS","#offset");
-	Init_champs_freq("DOF","#Ecart_LNB");
+	Init_champs_freq("DOF","#Xtal_Error");
 	Init_champs_freq("SFr","#SDR_Freq");
 	Init_champs_freq("ZFr","#zoom_freq_in");
 	//MouseWheel
@@ -1255,28 +1026,17 @@ function Init_Page_RX(){
 	$('#zoom_freq').on('touchmove', function(event){ event.stopPropagation()});
 	Affich_freq_champs(0,"#ZFr");
 	$('body').on('keydown', function(event){Keyboard_Freq(event)});
-	//Filtrage audio
-	Choix_PB_RX();
-	// Init Tracking eventuel des beacons pour compenser les offsets
-	setInterval("Track_Beacon();",1000); 
-	setInterval("WatchDog();",900);
-	//Curseur Frequence Audio RX
+	
+	//Curseur Frequence Audio RX et Scan
 	dragCurseur();
+	dragScanZone();
 	// Liste Frequences clé
 	for (var i=0;i<Label.length;i++){
 		Liste_F.push([Label[i][0],Label[i][1],false]);
 	}
 	Affiche_ListeF();
-	if (  SDR_RX.IP.length>3){ //Stop any  RX radio process on Orange PI/Raspberry PI at init
-		
-		var adresse="http://"+SDR_RX.IP+"/cgi-bin/SelectRxRadio.py"
-		var fct="setTimeout('choix_modulation();', 400);console.log('RX_stopped');";
-		var loader='<iframe src="' + adresse + '?stop" onload="' + fct + '"></iframe>'
-		$("#RX_loader").html(loader);
-		
-		
-		
-	}
+	
+	
 	//Init IP
 	var MyIP=window.location.hostname;
 	if (SDR_RX.IP== ""){ //Premier demarrage
@@ -1288,8 +1048,23 @@ function Init_Page_RX(){
 	if (SDR_RX.IP.length>3) {
 		Set_RX_GPIO();
 		setInterval("Trace_Audio();",40);
-	} else {
-		choix_mode(); // To launch the TX later
+	} 
+	disp_CPU(SDR_RX.IP,"RX_CPU");
+}
+function disp_CPU(ip,id){	
+	if (ip.length>3) {
+		var url_="http://"+ip+"/log/CPU.js";
+		var s = document.createElement("script");
+		s.setAttribute("type", "text/javascript");
+		s.setAttribute("src", url_);
+		s.setAttribute("onload", " DISP_CPU_('"+ id +"' ,CPU_Model);");
+		document.body.appendChild(s);
+	}
+}
+function DISP_CPU_(id, cpu){
+	CPU_Models.push([id, cpu]);
+	for (var i=0;i<CPU_Models.length;i++){
+		$("#"+CPU_Models[i][0]).html("&nbsp;&nbsp;&nbsp;CPU : " + CPU_Models[i][1]);
 	}
 }
 function Init_champs_freq(id,idParent){
@@ -1307,6 +1082,7 @@ function choixBandeRX(){	//Suivant freq centrale RX defini les limites
 			SDR_RX.bandeRX=i;
 			SDR_RX.BandeRXmin=BandesRX[i][0];
 			SDR_RX.BandeRXmax=BandesRX[i][1];
+			SDR_RX.Xtal_Error=RX_Xtal_Errors[i];
 		}
 	}
 	ListRelay();
@@ -1320,15 +1096,18 @@ function newBandRX(t){
 	$("#slider_Frequence_centrale_RX").slider("option", "max", SDR_RX.BandeRXmax);
 	$("#slider_Frequence_centrale_RX").slider("option", "value",  SDR_RX.centrale_RX);
 	choix_freq_central();
+	GPredictRXcount = -6;
 	choix_freq_fine();
 	Affiche_Curseur();
 	Affiche_ListeF();
+	if (SDR_TX.TXeqRX) rxvtx();
 }
 
 // FREQUENCY Cursor
 //*****************
 function Mouse_Freq(ev){
-	var step=les_modes[SDR_RX.mode][5];
+	GPredictRXcount = -6; //To freeze doppler correction few seconds
+	var step=RX_modes[SDR_RX.mode][2];
 	SDR_RX.fine = SDR_RX.fine+step*ev.deltaY;
 	choix_freq_fine();
 	Affiche_Curseur();
@@ -1342,8 +1121,8 @@ function Keyboard_Freq(ev){
 	var actif=document.activeElement.tagName;
 	
 	if (actif != "INPUT" &&  actif != "SPAN") { //To reject input fiels and sliders
-		
-		var step=les_modes[SDR_RX.mode][5];
+		GPredictRXcount = -6;
+		var step=RX_modes[SDR_RX.mode][2];
 		if(ev.keyCode == 37 ) SDR_RX.fine = SDR_RX.fine-step;
 		if(ev.keyCode == 39 ) SDR_RX.fine = SDR_RX.fine+step;
 		choix_freq_fine();
@@ -1353,9 +1132,11 @@ function Keyboard_Freq(ev){
 
 function Recal_fine_centrale(deltaF){
 	var newFreq=SDR_RX.Audio_RX+deltaF;
+	GPredictRXcount = -6;
 	if (newFreq>SDR_RX.min+10000 && newFreq<SDR_RX.max-10000){ // On bouge la frequence fine
 		SDR_RX.fine=SDR_RX.fine+deltaF;
 		choix_freq_fine();
+		
 	} else { //gros saut en frequence
 		SDR_RX.centrale_RX=SDR_RX.centrale_RX+deltaF;
 		choix_freq_central();
@@ -1366,12 +1147,14 @@ function Recal_Freq_centrale(){
 	SDR_RX.min=parseInt(SDR_RX.centrale_RX)-SDR_RX.echant/2/bandes[SDR_RX.idx_bande][2];
 	SDR_RX.max=parseInt(SDR_RX.centrale_RX)+SDR_RX.echant/2/bandes[SDR_RX.idx_bande][2];
 	SDR_RX.bande=SDR_RX.max-SDR_RX.min; // Bande exacte à l'ecran
+	console.log("SDR_RX.bande",SDR_RX.bande);
 	if (SDR_RX.Audio_RX<SDR_RX.min+10000 || SDR_RX.Audio_RX>SDR_RX.max-10000){ //  frequence audio en dehors
 		SDR_RX.fine=0;
 		SDR_RX.centrale_RX=SDR_RX.Audio_RX;	
 		
 	}
 	Trace_Echelle();
+	GPredictRXcount = -6;
 	choix_freq_fine();
 	choix_freq_central();
 	Affiche_Curseur();
@@ -1385,7 +1168,7 @@ function OpenZoomFreq(ev){
 		var T="RX Audio";
 	}
 	if (ZoomFreq.id=="DOF") {
-		F=SDR_RX.Ecart_LNB;
+		F=SDR_RX.Xtal_Error;
 		var T="Manual Correction";
 	}
 	if (ZoomFreq.id=="FRT") { //Frequency TX
@@ -1416,7 +1199,7 @@ function Mouse_Zoom_Freq(ev){ //modif des digits du zoom
 	}
 	if (ZoomFreq.id=="DOF") {
 			Mouse_deltaOffset(ev);
-			F=SDR_RX.Ecart_LNB;
+			F=SDR_RX.Xtal_Error;
 	}
 	if (ZoomFreq.id=="FRT") {
 			Mouse_Freq_TX(ev);
@@ -1450,7 +1233,7 @@ function Touch_Zoom_Freq(ev){ //modif des digits
 			}
 			if (ZoomFreq.id=="DOF") {
 				Recal_deltaOffset(deltaFreq);
-				F=SDR_RX.Ecart_LNB;
+				F=SDR_RX.Xtal_Error;
 			}
 			if (ZoomFreq.id=="FRT") {
 				Recal_FTX(deltaFreq);
@@ -1469,8 +1252,8 @@ function Mouse_deltaOffset(ev){ //modif des digits
 	Recal_deltaOffset(deltaF);
 }
 function Recal_deltaOffset(deltaF){
-	SDR_RX.Ecart_LNB=Math.floor(SDR_RX.Ecart_LNB+deltaF);
-	Ecart_LNBs[SDR_RX.idx_offset]=SDR_RX.Ecart_LNB;
+	SDR_RX.Xtal_Error=Math.floor(SDR_RX.Xtal_Error+deltaF);
+	RX_Xtal_Errors[SDR_RX.bandeRX]=SDR_RX.Xtal_Error;
 	choix_freq_central();
 	Affiche_Curseur();
 }
@@ -1499,6 +1282,7 @@ function dragCurseur() {
 		idCurseur.style.left=posDiv+"px";
 		var new_pos=posDiv+10-ecran.border;
 		SDR_RX.fine=Math.floor(SDR_RX.min+(SDR_RX.bande)*new_pos/ecran.innerW -SDR_RX.centrale_RX);
+		GPredictRXcount = -6;
 		choix_freq_fine();
 	}
 	function closeDragElement() { 
@@ -1521,6 +1305,7 @@ function dragCurseur() {
 			idCurseur.style.left=posDiv+"px";			
 			var new_pos=posDiv+10-ecran.border;
 			SDR_RX.fine=Math.floor(SDR_RX.min+(SDR_RX.bande)*new_pos/ecran.innerW -SDR_RX.centrale_RX);
+			GPredictRXcount = -6;
 			choix_freq_fine();
 		}
 	}
@@ -1532,13 +1317,45 @@ function clickFreq(e){
 			// calculate the new cursor position:
 			var new_pos =  e.clientX-ecran.border;
 			SDR_RX.fine=Math.floor(SDR_RX.min+(SDR_RX.bande)*new_pos/ecran.innerW -SDR_RX.centrale_RX);
+			GPredictRXcount = -6;
 			choix_freq_fine();
 			Affiche_Curseur();
+	}
+}
+function dragScanZone() {
+	var idCurseur =document.getElementById("Scan_Zone");
+	var pos1 = 0,  pos3 = 0, posDiv=0;
+	idCurseur.addEventListener('touchmove', SZonTouchMove, false);
+	idCurseur.addEventListener('touchstart', SZonTouchStart, false);
+	
+	function SZonTouchStart(ev) {
+		if (ev.touches.length == 1) {
+			ev.preventDefault();
+			pos3 = ev.touches[0].clientY;
+			posDiv=parseFloat(idCurseur.style.top);
+		}
+	}
+	function SZonTouchMove(ev) {
+		if (ev.touches.length == 1) {
+			ev.preventDefault();
+			pos1 = pos3  - ev.touches[0].clientY;  
+			pos3 = ev.touches[0].clientY;
+			posDiv=posDiv-pos1;
+			idCurseur.style.top=posDiv+"px";			
+			RX_Scan.level = 100*posDiv/fenetres.spectreH;
+			RX_Scan.level = Math.max(0,RX_Scan.level);
+			if (RX_Scan.level>90) {
+				RX_Scan.areas.splice(0, RX_Scan.areas.length); // Clear all zones
+				RX_Scan.level=50;
+			}
+			RX_Scan.level=Math.floor(Math.min(90,RX_Scan.level));
+		}
 	}
 }
 function clearRX(){ //Set frequenci to the closest kHz
 	SDR_RX.Audio_RX=10000*Math.floor(SDR_RX.Audio_RX/10000+0.5);
 	SDR_RX.fine=SDR_RX.Audio_RX-SDR_RX.centrale_RX;
+	GPredictRXcount = -6;
 	choix_freq_fine();
 	Affiche_Curseur();
 }
@@ -1551,6 +1368,7 @@ function Flabel(f,e){
 	e.stopPropagation();
 	SDR_RX.Audio_RX=f;
 	SDR_RX.fine=SDR_RX.Audio_RX-SDR_RX.centrale_RX;
+	GPredictRXcount = -6;
 	choix_freq_fine();
 	Affiche_Curseur();
 }
@@ -1569,72 +1387,10 @@ function ValideIP(){
 	
 	$("#RX_ports").html("Ports: 80, "+Port_socket+","+(Port_socket+1)+","+(Port_socket+2));
 	$("#TX_ports").html("Ports: 80, "+(Port_socket+3)+","+(Port_socket+4));
-	SDR_RX.sdr = $("input[name='sdr']:checked").val();
-	sauvegarde_parametres();
-	sauvegarde_parametresTX();
-}
-function Track_Beacon() {
-	var coul="grey";
-	SDR_RX.auto_offset=$("#Auto_Offset_On").prop("checked");
-	Watch_dog.Last_Refresh++;
-	if (web_socket.para_on && web_socket.spectre_in){
-		if (balise.voie_recu && SDR_RX.auto_offset) { //On s'assure d'avoir reçu des données recemment
-			var Ecart=0;
-			var Nb_valide=0;
-			coul="Orange";
-			for (var i=0;i<balise.nb;i++){
-				for (var v=-1;v<=1;v++){			
-					balise.Voies[i][v+1]=0.1*voies_moy[balise.Idx[i]+v]+0.9*balise.Voies[i][v+1]; //Integration longue niveau voie
-				}			
-				//Recherche grossière de la voie la plus forte
-				var Max=-1000000;var K=0;
-				for (var j=balise.Idx_zone[i][0];j<=balise.Idx_zone[i][1];j++){
-					if (voies_moy[j]>Max){
-						Max=voies_moy[j];
-						K=j;
-					}
-				}
-				if ( Math.abs(balise.Idx[i]-K)<=1) { //voie centrale, gauche ou droite
-					if ( balise.Voies[i][1]>100){ //Niveau voie centrale suffisant
-						var Vg=Math.pow(10,balise.Voies[i][0]/10000); //On quitte les log
-						var Vc=Math.pow(10,balise.Voies[i][1]/10000);
-						var Vd=Math.pow(10,balise.Voies[i][2]/10000);
-						Ecart+=(Vg*balise.K[i][0]+Vc*balise.K[i][1]+Vd*balise.K[i][2])/Vc; //Ecart normalisé
-						Nb_valide++;
-						coul="Lime";
-					}
-				} else {
-					if (Max>100){ //Niveau voie suffisant 
-						if (K<balise.Idx[i]) {  
-							Ecart+=-0.1; // On force un saut de 100Hz
-						} else {
-							Ecart+=0.1;
-						}
-						Nb_valide++;
-						coul="LightGreen";
-					}
-				}
-			}
-			if (Nb_valide>0){ // On a des ecarts par rapport aux balises
-				var dF=300*Ecart/Nb_valide; //Coef de decalage en frequence 
-				balise.meanDelta=0.02*dF+0.98*balise.meanDelta; //Fitre decalage
-				dF=Math.floor(balise.meanDelta);
-				if (dF!=0){
-					Ecart_LNBs[SDR_RX.idx_offset]+=dF;
-					choix_freq_central();
-				} 
-				$("#F_df").html(dF+" Hz");
-			}
-		} else {
-			$("#F_df").html("");
-			
-		}
-		if (Watch_dog.Last_Refresh>5){
-			choix_freq_central(); //On rafraichi		
-		}
-	}
-	balise.voie_recu=false;
-	$("#F_Offset_locked").css("background-color",coul);
+	SDR_RX.sdr = $("input[name='RXsdr']:checked").val();
+	SDR_TX.sdr = $("input[name='TXsdr']:checked").val();
+	Save_RX_Para();
+	Save_TX_Para();
 }
 
 // Drawing
@@ -1699,32 +1455,7 @@ function Dessine_Tableau(canvas_ID,tableau,SR,Fmax) { // dessine une onde (table
       ctx.stroke();
     };
 	
-//Watchdog Data Exchanges and timer_info
-//**************************************
 
-function WatchDog(){
-	if(SDR_RX.IP.length>3) {
-		Watch_dog.RXpara++;
-		Watch_dog.RXspectre++;
-		if (audioRX.on) Watch_dog.RXaudio++;
-		if (Math.max(Watch_dog.RXpara,Watch_dog.RXspectre,Watch_dog.RXaudio)>7) $("#RXonLed").css("background-color","Red"); //Alerte messages n'arrivent pas
-	}
-	if(SDR_TX.IP.length>3) {
-		Watch_dog.TXpara++;
-		if (Watch_dog.TXpara>8 && tx_python_gnuradio_script != "stop") {$("#TXonLed").css("background-color","Red");console.log("TX return messages not received");} //Alerte messages n'arrivent pas
-	}
-	if (timer_info>0) {
-		timer_info--;
-	} else {
-		$("#fen_squelch" ).css("display","none");
-		$("#Relays_info").css("display","none");
-	}
-	if (timer_auto_relay>0){
-		timer_auto_relay--;
-	}else {
-		Test_si_relais_TX();
-	}
-}
 
 //Page FULL SCREEN
 //****************
@@ -1756,3 +1487,4 @@ function switch_page(){
 			  }
 	}
 }
+console.log("End loading remote_SDR.js");
